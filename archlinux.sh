@@ -91,15 +91,15 @@ function copy_chros_files () {
   echo alarm > ${MY_CHROOT_DIR}/etc/hostname
   echo -e "\n127.0.1.1\tlocalhost.localdomain\tlocalhost\talarm" >> ${MY_CHROOT_DIR}/etc/hosts
 
-  KERN_VER=`uname -r`
-  mkdir -p ${MY_CHROOT_DIR}/lib/modules/$KERN_VER/
-  cp -ar /lib/modules/$KERN_VER/* ${MY_CHROOT_DIR}/lib/modules/$KERN_VER/
-  mkdir -p ${MY_CHROOT_DIR}/lib/firmware/
-  cp -ar /lib/firmware/* ${MY_CHROOT_DIR}/lib/firmware/
+  #KERN_VER=`uname -r`
+  #mkdir -p ${MY_CHROOT_DIR}/lib/modules/$KERN_VER/
+  #cp -ar /lib/modules/$KERN_VER/* ${MY_CHROOT_DIR}/lib/modules/$KERN_VER/
+  #mkdir -p ${MY_CHROOT_DIR}/lib/firmware/
+  #cp -ar /lib/firmware/* ${MY_CHROOT_DIR}/lib/firmware/
 
   # remove tegra_lp0_resume firmware since it is owned by latest
   # linux-nyan kernel package
-  rm ${MY_CHROOT_DIR}/lib/firmware/tegra12x/tegra_lp0_resume.fw
+  #rm ${MY_CHROOT_DIR}/lib/firmware/tegra12x/tegra_lp0_resume.fw
 
   end_progress
 }
@@ -126,30 +126,13 @@ printf "\033[0mMove around the mouse, open some tabs and surf the internet. This
 #
 # Make sure, that the archlinux keyring is populated
 #
-# ... also use curl to download packages with pacman to
-# enable larger timeout for slow wifi connections
-#
 start_progress "Initializing pacman keyring"
 cat > ${MY_CHROOT_DIR}/pacman-keyring.sh << EOF
-sed -i 's/#XferCommand = \/usr\/bin\/curl -L -C - -f -o %o %u/XferCommand = \/usr\/bin\/curl -L -C - -f --connect-timeout 60 -o %o %u/' /etc/pacman.conf
 pacman-key --init
 pacman-key --populate archlinuxarm
 EOF
 
 exec_in_chroot pacman-keyring.sh
-
-end_progress
-}
-
-function restore_pacman_conf () {
-
-start_progress "Restoring /etc/pacman.conf"
-
-cat > ${MY_CHROOT_DIR}/restore-pacman-conf.sh << EOF
-sed -i 's/XferCommand = \/usr\/bin\/curl -L -C - -f --connect-timeout 60 -o %o %u/#XferCommand = \/usr\/bin\/curl -L -C - -f -o %o %u/' /etc/pacman.conf
-EOF
-
-exec_in_chroot restore-pacman-conf.sh
 
 end_progress
 }
@@ -164,7 +147,7 @@ start_progress "Installing development base packages"
 # that belong to the wheel group
 #
 cat > ${MY_CHROOT_DIR}/install-develbase.sh << EOF
-pacman -Syy --needed --noconfirm sudo dialog base-devel devtools vim rsync git vboot-utils
+pacman -Syy --needed --noconfirm base nano crda linux-armv7-chromebook linux-armv7-headers sudo dialog base-devel devtools rsync git vboot-utils
 usermod -aG wheel alarm
 sed -i 's/# %wheel ALL=(ALL) ALL/%wheel ALL=(ALL) ALL/' /etc/sudoers
 EOF
@@ -181,132 +164,17 @@ start_progress "Installing X-server basics"
 cat > ${MY_CHROOT_DIR}/install-xbase.sh <<EOF
 
 pacman -Syy --needed --noconfirm \
-        iw networkmanager network-manager-applet \
-        lightdm lightdm-gtk-greeter \
-        chromium \
-        xorg-server xorg-apps xf86-input-synaptics \
-        xorg-twm xorg-xclock xterm xorg-xinit
+        iw networkmanager network-manager-applet gnome gdm
+        
 systemctl enable NetworkManager
-systemctl enable lightdm
+systemctl enable gdm
 EOF
 
 exec_in_chroot install-xbase.sh
 
 end_progress
 
-#
-# ArchLinuxARM repo contains xorg-server >= 1.18 which
-# is incompatible with the proprietary NVIDIA drivers
-# Thus, we downgrade to xorg-server 1.17 and required
-# input device drivers from source package
-#
-# We also put the xorg-server and xf86-input-evdev/xf86-input-synaptics into
-# pacman's IgnorePkg
-#
-start_progress "Downgrading xorg-server for compatibility with NVIDIA drivers"
-
-cat > ${MY_CHROOT_DIR}/install-xorg-ABI-19.sh << EOF
-
-packages=(xorg-server-1.17.4-2-armv7h.pkg.tar.xz
-          xorg-server-common-1.17.4-2-armv7h.pkg.tar.xz
-          xorg-server-xvfb-1.17.4-2-armv7h.pkg.tar.xz
-          xf86-input-mouse-1.9.1-1-armv7h.pkg.tar.xz
-          xf86-input-keyboard-1.8.1-1-armv7h.pkg.tar.xz
-          xf86-input-evdev-2.10.0-1-armv7h.pkg.tar.xz
-          xf86-input-joystick-1.6.2-5-armv7h.pkg.tar.xz
-          xf86-input-synaptics-1.8.3-1-armv7h.pkg.tar.xz
-          xf86-video-fbdev-0.4.4-4-armv7h.pkg.tar.xz
-          libxfont-1.5.3-1.1-armv7h.pkg.tar.xz)
-
-cd /tmp
-
-for p in \${packages[@]}
-do
-  sudo -u nobody -H curl -s -L -O ${MY_REPO_PATH}/\$p
-done
-
-yes | pacman --needed -U  \${packages[@]}
-
-sed -i 's/#IgnorePkg   =/IgnorePkg   = xorg-server xorg-server-common xorg-server-xvfb xf86-input-mouse xf86-input-keyboard xf86-input-evdev xf86-input-joystick xf86-input-synaptics xf86-video-fbdev/' /etc/pacman.conf
-
-EOF
-
-exec_in_chroot install-xorg-ABI-19.sh
-
-end_progress
-
 }
-
-
-function install_xfce4 () {
-
-start_progress "Installing XFCE4"
-
-# add .xinitrc to /etc/skel that defaults to xfce4 session
-cat > ${MY_CHROOT_DIR}/etc/skel/.xinitrc << EOF
-#!/bin/sh
-#
-# ~/.xinitrc
-#
-# Executed by startx (run your window manager from here)
-
-if [ -d /etc/X11/xinit/xinitrc.d ]; then
-  for f in /etc/X11/xinit/xinitrc.d/*; do
-    [ -x \"\$f\" ] && . \"\$f\"
-  done
-  unset f
-fi
-
-# exec gnome-session
-# exec startkde
-exec startxfce4
-# ...or the Window Manager of your choice
-EOF
-
-cat > ${MY_CHROOT_DIR}/install-xfce4.sh << EOF
-
-pacman -Syy --needed --noconfirm  xfce4 xfce4-goodies
-# copy .xinitrc to already existing home of user 'alarm'
-cp /etc/skel/.xinitrc /home/alarm/.xinitrc
-cp /etc/skel/.xinitrc /home/alarm/.xprofile
-sed -i 's/exec startxfce4/# exec startxfce4/' /home/alarm/.xprofile
-chown alarm:users /home/alarm/.xinitrc
-chown alarm:users /home/alarm/.xprofile
-EOF
-
-exec_in_chroot install-xfce4.sh
-
-end_progress
-
-}
-
-
-function install_kernel () {
-
-start_progress "Installing kernel"
-
-cat > ${MY_CHROOT_DIR}/install-kernel.sh << EOF
-
-packages=(linux-nyan-3.10.18-26-armv7h.pkg.tar.xz
-          linux-nyan-headers-3.10.18-26-armv7h.pkg.tar.xz)
-
-cd /tmp
-
-for p in \${packages[@]}
-do
-  sudo -u nobody -H curl -s -L -O ${MY_REPO_PATH}/\$p
-done
-
-yes | pacman --needed -U  \${packages[@]}
-
-EOF
-
-exec_in_chroot install-kernel.sh
-
-end_progress
-
-}
-
 
 function install_gpu_driver () {
 
@@ -318,20 +186,8 @@ start_progress "Installing proprietary NVIDIA drivers"
 
 cat > ${MY_CHROOT_DIR}/install-tegra.sh << EOF
 
-packages=(gpu-nvidia-tegra-k1-nvrm-21.7.0-1-armv7h.pkg.tar.xz
-          gpu-nvidia-tegra-k1-x11-21.7.0-1-armv7h.pkg.tar.xz
-          gpu-nvidia-tegra-k1-openmax-21.7.0-1-armv7h.pkg.tar.xz
-          gpu-nvidia-tegra-k1-openmax-codecs-21.7.0-1-armv7h.pkg.tar.xz
-          gpu-nvidia-tegra-k1-libcuda-21.7.0-1-armv7h.pkg.tar.xz)
-
-cd /tmp
-
-for p in \${packages[@]}
-do
-  sudo -u nobody -H curl -s -L -O ${MY_REPO_PATH}/\$p
-done
-
-yes | pacman --needed -U  --force \${packages[@]}
+pacman -Syy --needed --noconfirm \
+        mesa libva-mesa-driver mesa-vdpau
 
 usermod -aG video alarm
 EOF
@@ -355,20 +211,6 @@ SUBSYSTEM=="input", KERNEL=="event*", SUBSYSTEMS=="platform", KERNELS=="gpio-key
 
 LABEL="tegra_lid_switch_end"
 EOF
-
-}
-
-function install_misc_utils () {
-
-start_progress "Installing some more utilities"
-
-cat > ${MY_CHROOT_DIR}/install-utils.sh <<EOF
-pacman -Syy --needed --noconfirm  sshfs screen file-roller
-EOF
-
-exec_in_chroot install-utils.sh
-
-end_progress
 
 }
 
@@ -2107,12 +1949,6 @@ fi
 
 #setterm -blank 0
 
-echo ""
-echo "WARNING! This script will install binary packages from an unofficial source!"
-echo ""
-echo "If you don't trust me (Ronny Lorenz a.k.a. RaumZeit) press CTRL+C to quit"
-echo "(see https://github.com/RaumZeit/LinuxOnAcerCB5-311 for further details)"
-echo ""
 read -p "Press [Enter] to proceed installation of ArchLinuxARM"
 
 if [ "$1" != "" ]; then
@@ -2268,20 +2104,11 @@ install_dev_tools
 
 install_xbase
 
-install_xfce4
-
 install_sound
-
-install_kernel
 
 install_gpu_driver
 
-install_misc_utils
-
 tweak_misc_stuff
-
-restore_pacman_conf
-
 
 #Set ArchLinuxARM kernel partition as top priority for next boot (and next boot only)
 cgpt add -i ${kern_part} -P 5 -T 1 ${target_disk}
